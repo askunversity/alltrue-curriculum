@@ -27,7 +27,9 @@ Google Apps Script 課表與點名系統。
 1. 修改 `core.gs.txt` 檔頭版本號與更新日期。
 2. 更新 `showVersionInfo()` 內的版本號、日期與本次重點。
 3. 在本 README 的「目前版本」區塊更新版本、日期、重點。
-4. 在 Git commit message 清楚描述本次變更，例如：
+4. 在 `CHANGELOG.md` 新增一筆本次修改描述，至少寫清楚日期、版本、重點。
+5. 準備 commit 前，先整理一段「本次修改描述」，內容要能直接對應 commit message。
+6. 在 Git commit message 清楚描述本次變更，例如：
    - `feat: remove student cell restrictions`
    - `fix: improve attendance write-back conflict reporting`
    - `chore: update version info to v2.1`
@@ -36,4 +38,5 @@ Google Apps Script 課表與點名系統。
 
 - 功能變更先改程式，再改版本資訊。
 - 影響使用者行為的調整要寫進 `showVersionInfo()`。
+- 準備 commit 時，要同時整理「修改摘要」與「commit message」，避免只有改程式沒有留下說明。
 - 只有確認點名單、回寫或報表流程正常後再推送到 GitHub。
