@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>月份匯出選擇器</title>
+  <style>
+    body {
+      font-family: 'Google Sans', Arial, Helvetica, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background-color: #f8f9fa;
+    }
+    
+    .container {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #1a73e8;
+      font-weight: 500;
+      font-size: 16px;
+    }
+    
+    .loading {
+      text-align: center;
+      padding: 20px;
+      color: #5f6368;
+      font-style: italic;
+    }
+    
+    .no-data {
+      text-align: center;
+      padding: 20px;
+      color: #ea4335;
+      background-color: #fce8e6;
+      border-radius: 4px;
+      border: 1px solid #f9dedc;
+    }
+    
+    .month-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      gap: 8px;
+      margin-bottom: 20px;
+    }
+    
+    .month-item {
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      border: 2px solid #dadce0; /* 加粗邊框提示可點擊 */
+      border-radius: 6px;
+      background-color: #f8f9fa;
+      transition: all 0.2s ease;
+      cursor: pointer;
+      user-select: none;
+      position: relative; /* 為偽元素定位 */
+    }
+    
+    /* 添加點擊提示 */
+    .month-item::before {
+      content: "點擊選擇";
+      position: absolute;
+      top: -8px;
+      right: 8px;
+      background: #1a73e8;
+      color: white;
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 10px;
+      opacity: 0;
+      transform: translateY(-5px);
+      transition: all 0.3s ease;
+      pointer-events: none;
+      z-index: 10;
+    }
+    
+    .month-item:hover::before {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    
+    .month-item:hover {
+      background-color: #e8f0fe;
+      border-color: #1a73e8;
+      transform: translateY(-1px); /* 輕微上浮效果 */
+      box-shadow: 0 4px 12px rgba(26, 115, 232, 0.15);
+    }
+    
+    .month-item.selected {
+      background-color: #e8f0fe;
+      border-color: #1a73e8;
+      box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+    }
+    
+    .month-item.selected::before {
+      content: "已選擇 ✓";
+      background: #137333;
+    }
+    
+    .month-item input[type="checkbox"] {
+      margin: 0 8px 0 0;
+      transform: scale(1.2);
+      cursor: pointer;
+      pointer-events: none; /* 禁用checkbox的直接點擊 */
+    }
+    
+    .month-label {
+      font-weight: 500;
+      font-size: 14px;
+      color: #202124;
+      cursor: pointer;
+      flex: 1;
+    }
+    
+    .controls {
+      margin-bottom: 16px;
+      padding: 12px;
+      background-color: #f1f3f4;
+      border-radius: 6px;
+    }
+    
+    .control-buttons {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    
+    .control-btn {
+      flex: 1;
+      padding: 6px 12px;
+      border: 1px solid #dadce0;
+      background-color: white;
+      color: #1a73e8;
+      border-radius: 4px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    
+    .control-btn:hover {
+      background-color: #e8f0fe;
+      border-color: #1a73e8;
+    }
+    
+    .selected-count {
+      font-size: 12px;
+      color: #5f6368;
+      text-align: center;
+      margin-top: 8px;
+    }
+    
+    .button-container {
+      display: flex;
+      gap: 8px;
+      margin-top: 16px;
+    }
+    
+    button {
+      flex: 1;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+    }
+    
+    .primary-btn {
+      background-color: #1a73e8;
+      color: white;
+    }
+    
+    .primary-btn:hover:not(:disabled) {
+      background-color: #1557b0;
+    }
+    
+    .primary-btn:disabled {
+      background-color: #dadce0;
+      color: #5f6368;
+      cursor: not-allowed;
+    }
+    
+    .secondary-btn {
+      background-color: white;
+      color: #5f6368;
+      border: 1px solid #dadce0;
+    }
+    
+    .secondary-btn:hover {
+      background-color: #f8f9fa;
+    }
+    
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid transparent;
+      border-top: 2px solid currentColor;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 8px;
+    }
+    
+    @keyframes spin {
+      100% { transform: rotate(360deg); }
+    }
+    
+    .status {
+      margin-top: 12px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 13px;
+      text-align: center;
+      display: none;
+    }
+    
+    .status.success {
+      background-color: #e8f5e8;
+      color: #137333;
+      border: 1px solid #ceead6;
+    }
+    
+    .status.error {
+      background-color: #fce8e6;
+      color: #d93025;
+      border: 1px solid #f9dedc;
+    }
+    
+    .status.info {
+      background-color: #e8f0fe;
+      color: #1a73e8;
+      border: 1px solid #d2e3fc;
+    }
+    
+    .divider {
+      height: 1px;
+      background-color: #dadce0;
+      margin: 16px 0;
+    }
+    
+    /* 響應式設計 */
+    @media (max-width: 300px) {
+      .month-grid {
+        grid-template-columns: 1fr;
+      }
+      
+      .control-buttons {
+        flex-direction: column;
+      }
+      
+      .button-container {
+        flex-direction: column;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      💰 計算科目數獎金
+    </div>
+    
+    <div class="controls" id="controls" style="display: none;">
+      <div class="control-buttons">
+        <button type="button" class="control-btn" onclick="selectAll()">全選</button>
+        <button type="button" class="control-btn" onclick="selectNone()">全不選</button>
+        <button type="button" class="control-btn" onclick="selectRecent()">最近3月</button>
+      </div>
+      <div class="selected-count" id="selectedCount">已選擇: 0 個月份</div>
+    </div>
+    
+    <form id="monthForm">
+      <div id="monthBox" class="loading">
+        <div class="spinner" style="margin: 0 auto 8px;"></div>
+        載入月份資料中...
+      </div>
+      
+      <div class="divider" id="divider" style="display: none;"></div>
+      
+      <div class="button-container" id="buttonContainer" style="display: none;">
+        <button type="button" class="secondary-btn" onclick="google.script.host.close()">
+          取消
+        </button>
+        <button type="submit" class="primary-btn" id="generateBtn">
+          📊 開始計算
+        </button>
+      </div>
+      
+      <div id="status" class="status"></div>
+    </form>
+  </div>
+
+  <script>
+    let monthList = [];
+    
+    // 初始化：載入月份清單
+    google.script.run
+      .withSuccessHandler(handleMonthsLoaded)
+      .withFailureHandler(handleLoadError)
+      .listMonths();
+    
+    // 處理月份載入成功
+    function handleMonthsLoaded(list) {
+      monthList = list || [];
+      const monthBox = document.getElementById('monthBox');
+      
+      if (!monthList.length) {
+        monthBox.innerHTML = '<div class="no-data">📅 目前沒有可匯出的月份</div>';
+        return;
+      }
+      
+      // 生成月份選項
+      monthBox.innerHTML = '<div class="month-grid" id="monthGrid"></div>';
+      const grid = document.getElementById('monthGrid');
+      
+      monthList.forEach(function(month, index) {
+        const monthItem = document.createElement('div');
+        monthItem.className = 'month-item';
+        monthItem.onclick = () => toggleMonth(index);
+        monthItem.setAttribute('data-month', month); // 添加資料屬性便於除錯
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = month;
+        checkbox.id = 'month_' + index;
+        checkbox.onchange = updateSelectedCount;
+        // 移除 checkbox 的 label 關聯，因為整個卡片都是可點擊的
+        
+        const label = document.createElement('span'); // 改為 span，不是 label
+        label.className = 'month-label';
+        label.textContent = month;
+        
+        monthItem.appendChild(checkbox);
+        monthItem.appendChild(label);
+        grid.appendChild(monthItem);
+      });
+      
+      // 顯示控制項和按鈕
+      document.getElementById('controls').style.display = 'block';
+      document.getElementById('divider').style.display = 'block';
+      document.getElementById('buttonContainer').style.display = 'flex';
+      
+      // 預設選擇最近3個月
+      selectRecent();
+    }
+    
+    // 處理載入錯誤
+    function handleLoadError(error) {
+      const monthBox = document.getElementById('monthBox');
+      monthBox.innerHTML = '<div class="no-data">❌ 載入失敗：' + error.message + '</div>';
+    }
+    
+    // 切換月份選擇狀態
+    function toggleMonth(index) {
+      const checkbox = document.getElementById('month_' + index);
+      const monthItem = checkbox.parentElement;
+      
+      checkbox.checked = !checkbox.checked;
+      updateMonthItemStyle(monthItem, checkbox.checked);
+      updateSelectedCount();
+      
+      // 添加點擊回饋動畫
+      monthItem.style.transform = 'scale(0.95)';
+      setTimeout(() => {
+        monthItem.style.transform = '';
+      }, 150);
+    }
+    
+    // 更新月份項目樣式
+    function updateMonthItemStyle(monthItem, selected) {
+      if (selected) {
+        monthItem.classList.add('selected');
+      } else {
+        monthItem.classList.remove('selected');
+      }
+    }
+    
+    // 更新選擇計數
+    function updateSelectedCount() {
+      const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+      const selectedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+      
+      document.getElementById('selectedCount').textContent = `已選擇: ${selectedCount} 個月份`;
+      
+      // 更新所有月份項目的樣式
+      checkboxes.forEach(cb => {
+        updateMonthItemStyle(cb.parentElement, cb.checked);
+      });
+      
+      // 更新按鈕狀態
+      const generateBtn = document.getElementById('generateBtn');
+      generateBtn.disabled = selectedCount === 0;
+    }
+    
+    // 控制功能
+    function selectAll() {
+      const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+      checkboxes.forEach(cb => cb.checked = true);
+      updateSelectedCount();
+    }
+    
+    function selectNone() {
+      const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+      checkboxes.forEach(cb => cb.checked = false);
+      updateSelectedCount();
+    }
+    
+    function selectRecent() {
+      const checkboxes = document.querySelectorAll('input[type="checkbox"]');
+      
+      // 先全部取消
+      checkboxes.forEach(cb => cb.checked = false);
+      
+      // 選擇最後3個（最近的月份）
+      const recent = Array.from(checkboxes).slice(-3);
+      recent.forEach(cb => cb.checked = true);
+      
+      updateSelectedCount();
+    }
+    
+    // 顯示狀態訊息
+    function showStatus(message, type) {
+      const statusDiv = document.getElementById('status');
+      statusDiv.textContent = message;
+      statusDiv.className = `status ${type}`;
+      statusDiv.style.display = 'block';
+    }
+    
+    // 隱藏狀態訊息
+    function hideStatus() {
+      const statusDiv = document.getElementById('status');
+      statusDiv.style.display = 'none';
+    }
+    
+    // 表單提交處理
+    document.getElementById('monthForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      
+      const checkboxes = document.querySelectorAll('input[type="checkbox"]:checked');
+      const selectedMonths = Array.from(checkboxes).map(cb => cb.value);
+      
+      if (!selectedMonths.length) {
+        showStatus('請至少選擇一個月份！', 'error');
+        return;
+      }
+      
+      // 更新UI狀態
+      const generateBtn = document.getElementById('generateBtn');
+      const originalText = generateBtn.innerHTML;
+      
+      generateBtn.disabled = true;
+      generateBtn.innerHTML = '⏳ 計算中...<span class="spinner"></span>';
+      
+      showStatus('正在計算科目數與獎金，請稍候...', 'info');
+      
+      // 禁用所有控制按鈕
+      const controlBtns = document.querySelectorAll('.control-btn');
+      controlBtns.forEach(btn => btn.disabled = true);
+      
+      // 執行計算
+      google.script.run
+        .withSuccessHandler(function() {
+          showStatus('✅ 計算完成！正在關閉視窗...', 'success');
+          
+          // 2秒後自動關閉
+          setTimeout(function() {
+            google.script.host.close();
+          }, 2000);
+        })
+        .withFailureHandler(function(error) {
+          console.error('計算獎金時發生錯誤:', error);
+          showStatus('❌ 計算失敗：' + error.message, 'error');
+          
+          // 恢復UI狀態
+          generateBtn.disabled = false;
+          generateBtn.innerHTML = originalText;
+          controlBtns.forEach(btn => btn.disabled = false);
+        })
+        .runMonthlySummaryFromSidebar(selectedMonths);
+    });
+    
+    // 支援鍵盤操作
+    document.addEventListener('keydown', function(e) {
+      if (e.ctrlKey || e.metaKey) {
+        switch(e.key) {
+          case 'a':
+            e.preventDefault();
+            selectAll();
+            break;
+          case 'd':
+            e.preventDefault();
+            selectNone();
+            break;
+        }
+      }
+      
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        const form = document.getElementById('monthForm');
+        form.dispatchEvent(new Event('submit'));
+      }
+    });
+    
+    // 月份項目點擊時隱藏錯誤訊息
+    document.addEventListener('change', function(e) {
+      if (e.target.type === 'checkbox') {
+        hideStatus();
+      }
+    });
+  </script>
+</body>
+</html>

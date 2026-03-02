@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <title>產生點名單</title>
+    <style>
+      body {
+        font-family: 'Google Sans', Arial, Helvetica, sans-serif;
+        padding: 16px;
+        background-color: #f8f9fa;
+        margin: 0;
+      }
+      
+      .container {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      }
+      
+      .header {
+        text-align: center;
+        margin-bottom: 20px;
+        color: #1a73e8;
+        font-weight: 500;
+      }
+      
+      .form-group {
+        margin-bottom: 16px;
+      }
+      
+      label {
+        display: block;
+        margin-bottom: 6px;
+        font-weight: 500;
+        color: #202124;
+        font-size: 14px;
+      }
+      
+      input[type=date] {
+        width: 100%;
+        padding: 12px;
+        border: 1px solid #dadce0;
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+        transition: border-color 0.2s;
+      }
+      
+      input[type=date]:focus {
+        outline: none;
+        border-color: #1a73e8;
+        box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2);
+      }
+      
+      .button-container {
+        margin-top: 20px;
+        text-align: center;
+      }
+      
+      button {
+        background-color: #1a73e8;
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        min-width: 120px;
+      }
+      
+      button:hover {
+        background-color: #1557b0;
+      }
+      
+      button:active {
+        background-color: #0d47a1;
+      }
+      
+      button:disabled {
+        background-color: #dadce0;
+        color: #5f6368;
+        cursor: not-allowed;
+      }
+      
+      .quick-select {
+        margin: 16px 0;
+        padding: 12px;
+        background-color: #f1f3f4;
+        border-radius: 4px;
+      }
+      
+      .quick-select-title {
+        font-weight: 500;
+        margin-bottom: 8px;
+        color: #202124;
+        font-size: 13px;
+      }
+      
+      .quick-buttons {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      
+      .quick-btn {
+        background-color: white;
+        color: #1a73e8;
+        border: 1px solid #dadce0;
+        padding: 6px 12px;
+        border-radius: 16px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: all 0.2s;
+        flex: 1;
+        min-width: 60px;
+        text-align: center;
+      }
+      
+      .quick-btn:hover {
+        background-color: #e8f0fe;
+        border-color: #1a73e8;
+      }
+      
+      .status {
+        margin-top: 12px;
+        padding: 8px;
+        border-radius: 4px;
+        font-size: 13px;
+        text-align: center;
+        display: none;
+      }
+      
+      .status.success {
+        background-color: #e8f5e8;
+        color: #137333;
+        border: 1px solid #ceead6;
+      }
+      
+      .status.error {
+        background-color: #fce8e6;
+        color: #d93025;
+        border: 1px solid #f9dedc;
+      }
+      
+      .status.loading {
+        background-color: #e8f0fe;
+        color: #1a73e8;
+        border: 1px solid #d2e3fc;
+      }
+      
+      .divider {
+        height: 1px;
+        background-color: #dadce0;
+        margin: 16px 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        📤 產生點名單
+      </div>
+      
+      <div class="form-group">
+        <label for="startDate">開始日期</label>
+        <input id="startDate" type="date" required>
+      </div>
+      
+      <div class="form-group">
+        <label for="endDate">結束日期</label>
+        <input id="endDate" type="date" required>
+      </div>
+      
+      <div class="quick-select">
+        <div class="quick-select-title">快速選擇</div>
+        <div class="quick-buttons">
+          <button type="button" class="quick-btn" onclick="setToday()">今天</button>
+          <button type="button" class="quick-btn" onclick="setThisWeek()">本週</button>
+          <button type="button" class="quick-btn" onclick="setNextWeek()">下週</button>
+          <button type="button" class="quick-btn" onclick="setThisMonth()">本月</button>
+        </div>
+      </div>
+      
+      <div class="divider"></div>
+      
+      <div class="button-container">
+        <button id="generateBtn" onclick="generateAttendanceSheet()">
+          📤 產生點名單
+        </button>
+      </div>
+      
+      <div id="status" class="status"></div>
+    </div>
+
+    <script>
+      // 頁面載入時設定預設日期（本週）
+      window.addEventListener('DOMContentLoaded', function() {
+        setThisWeek();
+      });
+      
+      // 快速選擇功能
+      function setToday() {
+        const today = new Date();
+        const dateStr = formatDateForInput(today);
+        document.getElementById('startDate').value = dateStr;
+        document.getElementById('endDate').value = dateStr;
+      }
+      
+      function setThisWeek() {
+        const today = new Date();
+        const monday = new Date(today);
+        monday.setDate(today.getDate() - today.getDay() + 1); // 本週一
+        
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 6); // 本週日
+        
+        document.getElementById('startDate').value = formatDateForInput(monday);
+        document.getElementById('endDate').value = formatDateForInput(sunday);
+      }
+      
+      function setNextWeek() {
+        const today = new Date();
+        const nextMonday = new Date(today);
+        nextMonday.setDate(today.getDate() - today.getDay() + 8); // 下週一
+        
+        const nextSunday = new Date(nextMonday);
+        nextSunday.setDate(nextMonday.getDate() + 6); // 下週日
+        
+        document.getElementById('startDate').value = formatDateForInput(nextMonday);
+        document.getElementById('endDate').value = formatDateForInput(nextSunday);
+      }
+      
+      function setThisMonth() {
+        const today = new Date();
+        const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+        const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+        
+        document.getElementById('startDate').value = formatDateForInput(firstDay);
+        document.getElementById('endDate').value = formatDateForInput(lastDay);
+      }
+      
+      // 日期格式化為 input[type=date] 所需格式
+      function formatDateForInput(date) {
+        return date.toISOString().split('T')[0];
+      }
+      
+      // 顯示狀態訊息
+      function showStatus(message, type) {
+        const statusDiv = document.getElementById('status');
+        statusDiv.textContent = message;
+        statusDiv.className = `status ${type}`;
+        statusDiv.style.display = 'block';
+      }
+      
+      // 隱藏狀態訊息
+      function hideStatus() {
+        const statusDiv = document.getElementById('status');
+        statusDiv.style.display = 'none';
+      }
+      
+      // 驗證日期範圍
+      function validateDateRange(startDate, endDate) {
+        if (!startDate || !endDate) {
+          return '請選擇開始和結束日期';
+        }
+        
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        
+        if (start > end) {
+          return '開始日期不能晚於結束日期';
+        }
+        
+        // 檢查日期範圍是否過大（超過3個月）
+        const diffTime = Math.abs(end - start);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (diffDays > 90) {
+          return '日期範圍不能超過3個月';
+        }
+        
+        return null; // 驗證通過
+      }
+      
+      // 主要產生函式
+      function generateAttendanceSheet() {
+        const startDate = document.getElementById('startDate').value;
+        const endDate = document.getElementById('endDate').value;
+        const generateBtn = document.getElementById('generateBtn');
+        
+        // 驗證輸入
+        const validationError = validateDateRange(startDate, endDate);
+        if (validationError) {
+          showStatus(validationError, 'error');
+          return;
+        }
+        
+        // 禁用按鈕並顯示載入狀態
+        generateBtn.disabled = true;
+        generateBtn.textContent = '⏳ 產生中...';
+        showStatus('正在產生點名單，請稍候...', 'loading');
+        
+        // 呼叫 Google Apps Script 函式
+        google.script.run
+          .withSuccessHandler(function(result) {
+            showStatus('✅ 點名單產生成功！', 'success');
+            
+            // 2秒後自動關閉側邊欄
+            setTimeout(function() {
+              google.script.host.close();
+            }, 2000);
+          })
+          .withFailureHandler(function(error) {
+            console.error('產生點名單時發生錯誤:', error);
+            showStatus('❌ 產生失敗：' + error.message, 'error');
+            
+            // 重新啟用按鈕
+            generateBtn.disabled = false;
+            generateBtn.textContent = '📤 產生點名單';
+          })
+          .generateAttendanceSheetByDateRange(startDate, endDate);
+      }
+      
+      // 支援 Enter 鍵提交
+      document.addEventListener('keypress', function(event) {
+        if (event.key === 'Enter') {
+          generateAttendanceSheet();
+        }
+      });
+      
+      // 日期變更時隱藏狀態訊息
+      document.getElementById('startDate').addEventListener('change', hideStatus);
+      document.getElementById('endDate').addEventListener('change', hideStatus);
+      
+      // 向下相容：保留原始函式名稱
+      function gen() {
+        generateAttendanceSheet();
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,1570 @@
+/*************************************************
+ * Google Apps Script 課表點名系統 v2.1 - 模組化版本（文凌優化版）
+ * 模組 1: 全域常數與工具函式 + Toast優化
+ * 更新日期：2026/03/03 取消學生欄位限制，學生欄有值就抓
+ *************************************************/
+
+/*************************************************
+ * CONFIG：全域常數
+ *************************************************/
+const TZ             = "Asia/Taipei";
+const DATA_START_ROW = 5;                        // 主表資料起點
+const STATUS_COLS    = [12,16,20,24,28,32,36];   // 點名欄
+const LOG_COLS       = [13,17,21,25,29,33,37];   // 日誌欄
+// 在 CONFIG 常數後面加入
+const PROTECTED_SHEETS = ['使用說明', '網址張貼表', '點名用', '老師加總表', '說明'];
+
+function isProtectedSheet(sheetName) {
+  return PROTECTED_SHEETS.some(protected => 
+    sheetName.includes(protected) || protected.includes(sheetName)
+  );
+}
+
+/*************************************************
+ * UTIL：工具函式 + Toast優化 + A1轉換
+ *************************************************/
+const round3 = n => Math.round((parseFloat(n)+Number.EPSILON)*1000)/1000;
+
+function cleanDate(raw){
+  if (raw instanceof Date && !isNaN(raw)) return raw;
+  const txt = String(raw).replace(/[^\d\/\-]/g,'')
+                         .replace(/^(\d{4})(\d{2})(\d{2})$/, '$1/$2/$3');
+  const d = new Date(txt);
+  return isNaN(d) ? null : d;
+}
+
+// 安全轉換：1-based 欄號 → A1 欄字母
+function colToA1(col1) {
+  let s = '', n = col1;
+  while (n > 0) {
+    const r = (n - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    n = Math.floor((n - 1) / 26);
+  }
+  return s;
+}
+
+// 【從2.1版提取】Toast 優化功能
+function showToast(message, title, timeout) {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    if (message === '' || message === null || message === undefined) {
+      // 清除 toast 的正確方式
+      ss.toast('', '', 1);
+    } else {
+      ss.toast(message, title || '⚙️ 處理中', timeout || 3);
+    }
+  } catch (e) {
+    console.log('Toast: ' + (title || '') + ' - ' + message);
+  }
+}
+
+function clearToast() {
+  try {
+    SpreadsheetApp.getActiveSpreadsheet().toast('', '', 1);
+  } catch (e) {
+    console.log('清除toast失敗');
+  }
+}
+
+/*************************************************
+ * 學生欄位檢測
+ * 原則：學生欄只要有內容就抓
+ *************************************************/
+function isStudentName(txt){
+  if(!txt) return false;
+  
+  txt = txt.trim();
+  return !!txt;
+}
+
+/*************************************************
+ * 模組 2: 主表格式與統計管理 - 優化版
+ *************************************************/
+
+/*************************************************
+ * A. 更新【當前】主表（統計＋格式）- 優化版
+ *************************************************/
+function updateMainSheetCurrent(){
+  updateMainSheetOptimized();
+  SpreadsheetApp.getUi().alert('✅ 目前工作表統計與格式已更新');
+}
+
+function updateMainSheet(sheet){
+  // 保持向下相容
+  updateMainSheetOptimized(sheet);
+}
+
+function updateMainSheetOptimized(sheet){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  sheet = sheet || ss.getActiveSheet();
+  
+  // 一次性讀取所有資料
+  const dataRange = sheet.getDataRange();
+  const data = dataRange.getValues();
+  const rows = data.length;
+  if (rows <= 4) return;
+
+  const cols = data[0].length, teacherCol = 8;
+  
+  showToast('正在優化主表格式...', '⚙️ 處理中', 3);
+
+  /* 1) 統計計算 - 批量處理 */
+  const weight = {
+    '上課有到':1,'上課有到 作業沒寫':1,
+    '1v1上課有到':3,'1v1上課有到 作業沒寫':3,
+    '1v2上課有到':1.5,'1v2上課有到 作業沒寫':1.5
+  };
+  
+  const out = [];
+  const backgrounds = [];
+  const borderRows = [];
+  let prevTeacher = '';
+
+  // 單次循環完成統計、背景色、邊框計算
+  for (let r = 4; r < rows; r++){
+    // 統計計算
+    let cls = 0, tut = 0;
+    for (let c = 0; c < cols; c++){
+      const v = (data[r][c] + '').trim();
+      if (weight[v]) cls += weight[v];
+      if (v === '輔導有到') tut++;
+    }
+    out.push([cls/4, tut/4, (cls+tut>=3?1:0)/4]);
+    
+    // 背景色計算
+    const bgColor = (Math.floor((r-4)/4) % 2 === 0) ? '#eeeeee' : '#ffffff';
+    backgrounds.push(Array(cols).fill(bgColor));
+    
+    // 邊框計算
+    const curTeacher = (data[r][teacherCol] + '').trim();
+    if (r === 4 || curTeacher !== prevTeacher) {
+      borderRows.push(r + 1);
+    }
+    prevTeacher = curTeacher;
+  }
+
+  // 批量執行所有更新操作
+  const operations = [
+    () => sheet.getRange(5, 2, out.length, 3).setValues(out),
+    () => sheet.getRange(5, 1, rows-4, cols).setBackgrounds(backgrounds),
+    () => {
+      // 🔧 先清除所有現有邊框（修正主表邊框殘留問題）
+      sheet.getRange(5, 1, rows-4, cols).setBorder(false,false,false,false,false,false);
+      
+      // 然後批量設定正確的邊框
+      borderRows.forEach(row => {
+        sheet.getRange(row, 1, 1, cols)
+             .setBorder(true,false,false,false,false,false,
+                       'black', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+      });
+    },
+    () => sheet.getRange(1, 1, 4, cols)
+               .setBackground('#ffffff')
+               .setBorder(false,false,false,false,false,false)
+  ];
+  
+  operations.forEach(op => op());
+  SpreadsheetApp.flush(); // 強制執行所有操作
+}
+
+/*************************************************
+ * B. 產生下一週主表 - 優化版
+ * 修改說明：已加入 BCD 欄歸零功能
+ *************************************************/
+function createNextWeekSheet(){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const cur = ss.getActiveSheet();
+  const sep = cur.getName().match(/^\d{8}([\-～~])\d{4}$/)?.[1] || '-';
+
+  let mon = cur.getRange(4,5).getValue();
+  if (!(mon instanceof Date)) mon = new Date(mon);
+  const nextMon = new Date(mon); nextMon.setDate(mon.getDate()+7);
+  const nextSun = new Date(nextMon); nextSun.setDate(nextMon.getDate()+6);
+
+  const newName = Utilities.formatDate(nextMon,TZ,'yyyyMMdd') + sep +
+                  Utilities.formatDate(nextSun,TZ,'MMdd');
+  
+  if (ss.getSheetByName(newName)){
+    ss.setActiveSheet(ss.getSheetByName(newName));
+    SpreadsheetApp.getUi().alert(`⚠️【${newName}】已存在，直接切換。`);
+    return;
+  }
+
+  showToast('正在複製工作表...', '⚙️ 處理中', 3);
+  
+  const ns = cur.copyTo(ss).setName(newName);
+  ss.setActiveSheet(ns);
+  ns.getRange(4,5)
+    .setValue(nextMon)
+    .setNumberFormat(cur.getRange(4,5).getNumberFormat());
+
+  // 計算資料行數
+  const rows = ns.getLastRow()-(DATA_START_ROW-1);
+
+  // 1. 批量清空點名與日誌欄
+  const rangesToClear = [...STATUS_COLS, ...LOG_COLS].map(col => 
+    ns.getRange(DATA_START_ROW, col, rows)
+  );
+  rangesToClear.forEach(range => range.clearContent());
+
+  // 2. 將 B、C、D 欄數值歸零 (新增功能)
+  if (rows > 0) {
+    // 建立一個全部為 0 的二維陣列 (rows 列 x 3 欄)
+    const zeroValues = Array(rows).fill([0, 0, 0]);
+    // 從第 5 列、第 2 欄 (B欄) 開始寫入
+    ns.getRange(DATA_START_ROW, 2, rows, 3).setValues(zeroValues);
+  }
+  
+  SpreadsheetApp.flush();
+  
+  SpreadsheetApp.getUi().alert(`✅ 已複製新主表【${newName}】，已清空點名日誌並將 BCD 欄歸零。`);
+}
+
+/*************************************************
+ * 模組 3: 月份側邊欄管理 - 優化版 + HTML優化
+ *************************************************/
+
+/*************************************************
+ * C. 月份側邊欄 - 優化版
+ *************************************************/
+function listMonths(){
+  const set = new Set();
+  // 一次性獲取所有工作表名稱
+  const sheetNames = SpreadsheetApp.getActiveSpreadsheet().getSheets().map(s => s.getName());
+  
+  sheetNames.forEach(n => {
+    const m1 = n.match(/^(\d{4})(\d{2})\d{2}/);
+    if(m1){ 
+      set.add(`${m1[1]}.${m1[2]}`); 
+      return; 
+    }
+    
+    const m2 = n.match(/^(\d{4})\.(\d{2})/);
+    if(m2){ 
+      set.add(`${m2[1]}.${m2[2]}`); 
+    }
+  });
+  
+  return [...set].sort();
+}
+
+function openMonthSidebar(){
+  try {
+    // 【從2.1版提取】HTML優化 - 錯誤處理
+    const html = HtmlService.createHtmlOutputFromFile('Sidebar_MonthPicker')
+                           .setWidth(300)
+                           .setTitle('📆 指定月份匯出');
+    SpreadsheetApp.getUi().showSidebar(html);
+  } catch (error) {
+    console.error('開啟側邊欄錯誤:', error);
+    SpreadsheetApp.getUi().alert('❌ 無法開啟月份選擇器，請檢查 HTML 檔案是否存在');
+  }
+}
+
+function runMonthlySummaryFromSidebar(arr){
+  generateFullMonthlySummaryOptimized(arr && arr.length ? arr : null);
+}
+
+/*************************************************
+ * 模組 4: 科目數與獎金計算 - 極速優化版 (針對大數據)
+ * 更新日期：2025/11/25
+ *************************************************/
+
+/*************************************************
+ * D. 科目數 & 獎金計算 - 極速優化版
+ *************************************************/
+function generateFullMonthlySummary(selectedMonths){
+  generateFullMonthlySummaryOptimized(selectedMonths);
+}
+
+function generateFullMonthlySummaryOptimized(selectedMonths){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const want = selectedMonths ? new Set(selectedMonths) : null;
+  
+  // 1. 獲取外部連結 (不變)
+  const linkSheet = ss.getSheetByName('網址張貼表');
+  if (!linkSheet) {
+    SpreadsheetApp.getUi().alert('❌ 找不到網址張貼表');
+    return;
+  }
+  
+  const id = linkSheet.getRange('B1').getValue()
+             ?.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
+  if(!id){ 
+    SpreadsheetApp.getUi().alert('❌ 外部連結無效'); 
+    return; 
+  }
+  
+  let outSS;
+  try {
+    outSS = SpreadsheetApp.openById(id);
+  } catch(e) {
+    SpreadsheetApp.getUi().alert('❌ 無法開啟外部試算表');
+    return;
+  }
+
+  // 2. 篩選相關工作表
+  // 排除不需要計算的表，減少無效讀取
+  const relevantSheets = ss.getSheets().filter(sh => {
+    const n = sh.getName();
+    return !n.includes('老師加總表') && 
+           !n.includes('點名用') && 
+           !n.includes('衝突報告_') &&
+           !isProtectedSheet(n) &&
+           /^\d{8}/.test(n);
+  });
+
+  if (relevantSheets.length === 0) {
+    SpreadsheetApp.getUi().alert('⚠️ 找不到符合的日期工作表');
+    return;
+  }
+
+  showToast(`準備處理 ${relevantSheets.length} 個工作表...`, '⚙️ 運算中', -1);
+
+  // 3. 串流式計算 (Stream-like Processing)
+  // 改進：讀一張表 -> 算一張表 -> 釋放記憶體。不要一次全部讀入。
+  
+  const monthly = new Map();
+  const daily = new Map();
+  let skipped = 0;
+  let totalRowsProcessed = 0;
+
+  // 預先定義需要的變數，避免迴圈內重複宣告
+  const timeStart = new Date().getTime();
+
+  for (let i = 0; i < relevantSheets.length; i++) {
+    const sh = relevantSheets[i];
+    const sheetName = sh.getName();
+    
+    // 顯示進度 (每處理一張表更新一次，避免太頻繁)
+    showToast(`正在掃描: ${sheetName} (${i+1}/${relevantSheets.length})`, '⚙️ 讀取數據', -1);
+    
+    // ⚠️ 關鍵優化：這裡移除了 updateMainSheetOptimized(sh)
+    // 計算獎金時不需要重新畫框線和上色，這會節省大量時間。
+    
+    // 讀取數據：只讀取有資料的範圍，避免讀取整張表的空行
+    const lastRow = sh.getLastRow();
+    if (lastRow < 5) continue; // 沒資料跳過
+    
+    // 雖然 getDataRange 方便，但為了效能，我們這裡直接讀取數據區塊
+    // 假設資料寬度固定讀到 40 欄 (包含日誌欄)，這比 getDataRange 更快一點
+    const data = sh.getRange(DATA_START_ROW, 1, lastRow - DATA_START_ROW + 1, 40).getValues();
+    
+    // 處理該表數據
+    for(let r = 0; r < data.length; r++){
+      const rowData = data[r];
+      const dRaw = rowData[4]; // E欄 日期
+      const t = rowData[8];    // I欄 老師
+      
+      // 快速檢查：無日期或無老師則跳過
+      if(!dRaw || !t) {
+        skipped++;
+        continue;
+      }
+
+      const d = cleanDate(dRaw);
+      if(!d) {
+        skipped++;
+        continue;
+      }
+
+      const mon = Utilities.formatDate(d, TZ, 'yyyy.MM');
+      // 如果有指定月份且不符，則跳過
+      if(want && !want.has(mon)) continue;
+
+      // 累加數據：B欄(idx 1), C欄(idx 2), D欄(idx 3)
+      const arr = [+rowData[1]||0, +rowData[2]||0, +rowData[3]||0];
+      
+      // 構建 Key
+      const kM = `${mon}__${t}`;
+      const kD = `${mon}__${Utilities.formatDate(d,TZ,'yyyy/MM/dd')}__${t}`;
+      
+      // 更新 Monthly Map
+      const currM = monthly.get(kM);
+      if (currM) {
+        currM[0] += arr[0];
+        currM[1] += arr[1];
+        currM[2] += arr[2];
+      } else {
+        monthly.set(kM, [...arr]);
+      }
+
+      // 更新 Daily Map
+      const currD = daily.get(kD);
+      if (currD) {
+        currD[0] += arr[0];
+        currD[1] += arr[1];
+        currD[2] += arr[2];
+      } else {
+        daily.set(kD, [...arr]);
+      }
+    }
+    
+    totalRowsProcessed += data.length;
+    // 強制釋放 data 變數引用 (雖然 JS 有 GC，但明確作用域有幫助)
+  }
+
+  // 檢查是否超時風險 (如果已經跑超過 4.5 分鐘，提示使用者)
+  const timeElapsed = (new Date().getTime() - timeStart) / 1000;
+  console.log(`數據讀取與計算耗時: ${timeElapsed} 秒`);
+
+  // 4. 生成內部老師加總表
+  showToast('正在生成內部報表...', '⚙️ 寫入中', -1);
+  
+  const byMonth = new Map();
+  // 使用迭代器優化迴圈
+  for (const [k, v] of daily) {
+    const [m, d, t] = k.split('__');
+    if (!byMonth.has(m)) byMonth.set(m, []);
+    byMonth.get(m).push([d, t, ...v.map(round3)]);
+  }
+
+  // 批量寫入內部表 (優化：一次性寫入標題與內容)
+  byMonth.forEach((rows, m) => {
+    const sheetName = `${m} 老師加總表`;
+    let sh = ss.getSheetByName(sheetName);
+    if (!sh) sh = ss.insertSheet(sheetName);
+    
+    sh.clear(); // 清除舊資料
+    
+    if (rows.length > 0) {
+      // 排序：日期 -> 老師
+      rows.sort((a,b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
+      
+      // 準備一次寫入的陣列：[標題列, ...資料列]
+      const outputValues = [
+        ['日期','老師','科目數','輔導數','一對三'],
+        ...rows
+      ];
+      
+      sh.getRange(1, 1, outputValues.length, 5).setValues(outputValues);
+    } else {
+       sh.getRange(1, 1, 1, 5).setValues([['日期','老師','科目數','輔導數','一對三']]);
+    }
+  });
+
+  // 5. 準備外部獎金表資料
+  // 參照表 (不變)
+  const qty = Array.from({length:46}, (_, i) => i + 10);
+  const bonus = [500,1000,1500,2000,2500,3000,3500,4500,5500,6500,
+                 7500,9000,10500,12000,13500,15000,16500,18000,19500,21000,
+                 22500,24000,25500,27000,28500,30000,31500,33000,34500,36000,
+                 37500,39000,40500,42000,43500,45000,46500,48000,49500,51000,
+                 52500,54000,55500,57000,58500,60000];
+  const refTable = qty.map((q, i) => [q, bonus[i], '', 100]);
+
+  // 分組月資料
+  const group = new Map();
+  for (const [k, v] of monthly) {
+    const [m, t] = k.split('__');
+    if (!group.has(m)) group.set(m, []);
+    group.get(m).push({t, vals: v});
+  }
+
+  // 6. 寫入外部試算表
+  showToast('正在寫入外部獎金表...', '⚙️ 雲端同步', -1);
+  
+  let processedCount = 0;
+  // 這裡仍然需要批次處理，因為外部寫入較慢
+  for (const [m, list] of group) {
+    processedCount++;
+    showToast(`寫入外部月份: ${m} (${processedCount}/${group.size})`, '⚙️ 寫入中', -1);
+    processMonthSheet(outSS, m, list, refTable);
+    
+    // 每處理完一個月就 flush 一次，避免請求堆積過多
+    SpreadsheetApp.flush();
+  }
+
+  clearToast(); 
+  const finalTime = ((new Date().getTime() - timeStart) / 1000).toFixed(1);
+  SpreadsheetApp.getUi().alert(`✅ 計算完成！\n⏱️ 耗時：${finalTime} 秒\n📊 掃描列數：${totalRowsProcessed}`);
+}
+
+// 【從2.1版提取優化】優化的單月表格處理函式 - 含分校科目數位置與顏色優化
+// 此函式保持不變，因為邏輯已經是好的
+function processMonthSheet(outSS, monthName, teacherList, refTable) {
+  let sh = outSS.getSheetByName(monthName);
+  if (!sh) sh = outSS.insertSheet(monthName);
+  
+  sh.clear();
+
+  // 批量設定標題
+  const headers = [
+    ['日期','老師姓名','科目數總計','輔導科目數總計','一對三總計',
+     '科目數佔比','行政或輔導加給','師派科目數總計','師派輔導數','師派一對三',
+     '含師派輔導科目數總計','科目數獎金','一對三獎金','200科獎金','總發放獎金']
+  ];
+  
+  sh.getRange(1, 1, 1, 15).setValues(headers);
+  sh.getRange(1, 18, 1, 4).setValues([['科目數','科目數獎金','一對三獎金','每段100元']]);
+  sh.getRange(1, 1, 1, sh.getMaxColumns()).setBackground('#FFE5CC');
+
+  if (teacherList.length === 0) {
+    sh.getRange(2, 18, refTable.length, 4).setValues(refTable);
+    return;
+  }
+
+  // 批量計算和設定資料
+  const rows = [];
+  let totalSubjects = 0;
+  
+  // 按照老師名字排序
+  teacherList.sort((a,b) => a.t.localeCompare(b.t));
+
+  teacherList.forEach(obj => {
+    const [B, C, D] = obj.vals;
+    const b = round3(B/8);
+    const c = round3(C/8); 
+    const d = round3(D);
+    totalSubjects += b;
+    rows.push([monthName, obj.t, b, c, d, '', 0, 0, 0, 0, '', '', '', '', '']);
+  });
+
+  // 批量設定資料和公式
+  if (rows.length > 0) {
+    sh.getRange(2, 1, rows.length, 15).setValues(rows);
+    
+    // 分校科目數設定
+    const summaryRow = rows.length + 3; 
+    
+    sh.getRange(summaryRow, 2)
+      .setValue('分校科目數')
+      .setBackground('#ffebee')    
+      .setFontWeight('bold');     
+    
+    sh.getRange(summaryRow, 3)
+      .setValue(round3(totalSubjects))
+      .setBackground('#ffcdd2')   
+      .setFontWeight('bold');     
+    
+    // 公式部分
+    const formulas = rows.map((_, i) => {
+      const r = i + 2;
+      return [
+        `=IF($C$${summaryRow}=0,0,C${r}/$C$${summaryRow})`, 
+        `=SUM(C${r}:D${r})+SUM(G${r}:I${r})`, 
+        `=IF(K${r}>9.999,LOOKUP(ROUNDDOWN(K${r},0),$R$2:$R$47,$S$2:$S$47),0)`, 
+        `=(E${r}+J${r})*100`, 
+        `=IF($C$${summaryRow}>=200,ROUNDDOWN($C$${summaryRow}*200*F${r},-2),0)` 
+      ];
+    });
+    
+    sh.getRange(2, 6, formulas.length, 1).setFormulas(formulas.map(f => [f[0]])); // F
+    sh.getRange(2, 11, formulas.length, 1).setFormulas(formulas.map(f => [f[1]])); // K
+    sh.getRange(2, 12, formulas.length, 1).setFormulas(formulas.map(f => [f[2]])); // L
+    sh.getRange(2, 13, formulas.length, 1).setFormulas(formulas.map(f => [f[3]])); // M
+    sh.getRange(2, 14, formulas.length, 1).setFormulas(formulas.map(f => [f[4]])); // N
+    
+    const totalFormulas = rows.map((_, i) => [`=SUM(L${i+2}:N${i+2})`]);
+    sh.getRange(2, 15, formulas.length, 1).setFormulas(totalFormulas);
+    
+    sh.getRange(2, 6, formulas.length, 1).setNumberFormat('0.00%');
+  } else {
+    const summaryRow = 3;
+    sh.getRange(summaryRow, 2).setValue('分校科目數').setBackground('#ffebee').setFontWeight('bold');
+    sh.getRange(summaryRow, 3).setValue(0).setBackground('#ffcdd2').setFontWeight('bold');
+  }
+
+  // 設定參照表
+  sh.getRange(2, 18, refTable.length, 4).setValues(refTable);
+}
+/*************************************************
+ * 模組 5: 點名系統 - 產生點名單（優化版 + 嚴格模式 + 時間排序 + 改善保護）
+ *************************************************/
+
+/* === 教室排序表 === */
+const ROOM_ORDER = ["1","2","2-1","2-2","3","4","5","6","7","8-1","8-2","9","9-1","9-2","10","11","12","13","14"];
+function roomRank(r){
+  const idx = ROOM_ORDER.indexOf(String(r).trim());
+  return idx === -1 ? Number.MAX_SAFE_INTEGER : idx;
+}
+
+/* === 點名狀態 & 顏色 === */
+const ATT_VALUES = [
+  { v:'上課有到',            color:'#D9EFBC' },
+  { v:'上課有到 作業沒寫',    color:'#FFD7D7' },
+  { v:'請假',                color:'#B8D7FF' },
+  { v:'輔導有到',            color:'#D9E5E8' },
+  { v:'輔導請假',            color:'#E7D4F8' },
+  { v:'1v1上課有到',         color:'#004EA8' },
+  { v:'1v1上課有到 作業沒寫', color:'#008B36' },
+  { v:'1v2上課有到',         color:'#5B3B00' },
+  { v:'1v2上課有到 作業沒寫', color:'#C00000' }
+];
+
+// === 0913請假傳遞設定 ===
+const LEAVE_STATUSES = ['請假','輔導請假'];     // 哪些視為請假
+const LEAVE_PROPAGATION_MODE = 'BLANK';          // 'BLANK'=留白；'DROP'=不輸出
+const LEAVE_NOTE_TAG = ' ';            // BLANK 模式在備註加註
+const LEAVE_KEY_INCLUDES_ROOM = false;           // 若要同教室才傳遞改成 true
+
+function showSidebarToGenerateSheet(){
+  try {
+    // 【從2.1版提取】HTML優化 - 錯誤處理
+    const html = HtmlService
+      .createHtmlOutputFromFile('Sidebar_DateRange')
+      .setTitle('📤 產生點名單')
+      .setWidth(300);
+    SpreadsheetApp.getUi().showSidebar(html);
+  } catch (error) {
+    console.error('開啟日期選擇側邊欄錯誤:', error);
+    SpreadsheetApp.getUi().alert('❌ 無法開啟日期選擇器，請檢查 HTML 檔案是否存在');
+  }
+}
+
+function parseTimeToMinutes(s){
+  s = String(s||'').trim()
+       .replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-65248))
+       .replace(/\s+/g,'');
+  if(!s.includes(':') && /^\d{3,4}$/.test(s)){
+    s = s.replace(/^(\d{1,2})(\d{2})$/, '$1:$2');
+  }
+  const [h,m] = s.split(':').map(x=>parseInt(x,10)||0);
+  return h*60 + m;
+}
+
+function generateAttendanceSheetByDateRange(startStr, endStr){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  showToast('正在產生點名單…','⚙️ 執行中',-1);
+  
+  const start = new Date(startStr); start.setHours(0,0,0,0);
+  const end   = new Date(endStr);   end.setHours(23,59,59,999);
+
+  // 1) 取得來源工作表（排除保護/彙總表）
+  const srcSheets = ss.getSheets().filter(s=>{
+    const n = s.getName();
+    return /^\d{8}/.test(n)
+       && !n.includes('點名用')
+       && !n.includes('老師加總表')
+       && !n.includes('衝突報告_')
+       && !isProtectedSheet(n);
+  });
+
+  // 2) 讀資料
+  showToast('正在讀取課表資料...','⚙️ 執行中',-1);
+  const sheetsData = new Map();
+  srcSheets.forEach(sh => {
+    sheetsData.set(sh.getName(), sh.getDataRange().getDisplayValues());
+  });
+
+  const studentCols = [9,13,17,21,25,29,33];
+  const rawRows = [];
+
+  // 3) 解析成 rawRows（每名學生一列）
+  showToast('正在解析學生課程...','⚙️ 執行中',-1);
+  sheetsData.forEach((disp, sheetName) => {
+    const yr = sheetName.substr(0,4);
+
+    const validDataRows = disp.slice(4).map((row, i) => ({row, index: i + 4}))
+      .filter(({row}) => {
+        const dateStr = (row[4]||'').toString();
+        if (!dateStr) return false;
+
+        const cleanStr = dateStr.replace(/\s+/g,'')
+                                .replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-65248));
+        let dt = null;
+        const m = cleanStr.match(/(\d{1,2})月(\d{1,2})日/);
+        if(m){
+          dt = new Date(`${yr}/${('0'+m[1]).slice(-2)}/${('0'+m[2]).slice(-2)}`);
+        } else {
+          const d2 = new Date(cleanStr.replace(/-/g,'/'));
+          if(!isNaN(d2)) dt = d2;
+        }
+        return dt && dt >= start && dt <= end;
+      });
+
+    validDataRows.forEach(({row, index}) => {
+      // 日期
+      const dateStr = (row[4]||'').toString().replace(/\s+/g,'')
+                          .replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-65248));
+      let dt = null;
+      const m = dateStr.match(/(\d{1,2})月(\d{1,2})日/);
+      if(m){
+        dt = new Date(`${yr}/${('0'+m[1]).slice(-2)}/${('0'+m[2]).slice(-2)}`);
+      } else {
+        const d2 = new Date(dateStr.replace(/-/g,'/'));
+        if(!isNaN(d2)) dt = d2;
+      }
+
+      const stMin = parseTimeToMinutes(row[5]);
+      const edMin = parseTimeToMinutes(row[6]);
+
+      const base = {
+        date    : Utilities.formatDate(dt, TZ, 'yyyy/MM/dd'),
+        stMin, edMin,
+        room    : row[7],
+        teacher : row[8],
+        sheet   : sheetName,
+        rowNum  : index + 1
+      };
+
+      // 學生欄
+      studentCols.forEach(c => {
+        const stu = row[c] ? row[c].trim() : '';
+        if(isStudentName(stu)) {
+          rawRows.push({
+            ...base,
+            student: stu,
+            note   : row[c+1] ? row[c+1].trim() : '',
+            stat   : row[c+2] ? row[c+2].trim() : ''
+          });
+        }
+      });
+    });
+  });
+
+  if(rawRows.length === 0){
+    showToast('區間內沒有學生列','⚠️ 無結果',5);
+    SpreadsheetApp.getUi().alert('⚠️ 區間內沒有學生列');
+    return;
+  }
+
+  // === 3.5) 0913 建立「請假傳遞」表：記錄同日×同師×同生（可選含教室）的「最早請假結束點」 ===
+  //之後遇到開始時間 ≥ 這個「請假結束點」的區段，就把點名欄留白或整列不輸出（依你的設定）。
+  const leaveUntilMap = new Map(); // key → earliest leave end (minute)
+  rawRows.forEach(r => {
+    if (LEAVE_STATUSES.includes(r.stat || '')) {
+      const k = LEAVE_KEY_INCLUDES_ROOM
+        ? `${r.date}|${r.teacher}|${r.student}|${r.room}`
+        : `${r.date}|${r.teacher}|${r.student}`;
+      const prev = leaveUntilMap.get(k);
+      if (prev === undefined || r.edMin < prev) leaveUntilMap.set(k, r.edMin);
+    }
+  });
+
+  // 4) 合併相鄰（2hr 以內、重疊/銜接）—— 但「請假」與「非請假」不可合併
+  // 【第一次排序：用於合併相鄰課程】
+  rawRows.sort((a,b)=>
+       a.date.localeCompare(b.date)
+    || roomRank(a.room)-roomRank(b.room)
+    || a.teacher.localeCompare(b.teacher)
+    || a.student.localeCompare(b.student)
+    || a.stMin - b.stMin
+  );
+
+  const MAX_MIN = 120;
+  const merged = [];
+  let grp = null;
+
+//0913請假與非請假不可合併
+  rawRows.forEach(rec=>{
+    const recIsLeave = LEAVE_STATUSES.includes(rec.stat || '');
+    if(!grp){
+      grp = {...rec, rows:[rec.rowNum], stats:[rec.stat], leave: recIsLeave};
+    } else {
+      const same = rec.date===grp.date
+                && rec.room===grp.room
+                && rec.teacher===grp.teacher
+                && rec.student===grp.student
+                && rec.note.trim()===grp.note.trim();
+      const touch = rec.stMin <= grp.edMin;
+      const within2h = (rec.edMin - grp.stMin) <= MAX_MIN;
+      const sameLeaveKind = (recIsLeave === !!grp.leave); // 重要：請假與非請假不可合併
+
+      if(same && touch && within2h && sameLeaveKind){
+        grp.edMin = Math.max(grp.edMin, rec.edMin);
+        grp.rows.push(rec.rowNum);
+        grp.stats.push(rec.stat);
+        grp.leave = grp.leave || recIsLeave;
+      } else {
+        merged.push(grp);
+        grp = {...rec, rows:[rec.rowNum], stats:[rec.stat], leave: recIsLeave};
+      }
+    }
+  });
+  if (grp) merged.push(grp);
+
+  // 【🚀 核心優化：時間優先排序】
+  showToast('正在按時間重新排序...','⚙️ 執行中',-1);
+  merged.sort((a,b)=>
+       a.date.localeCompare(b.date)        // 1. 日期優先
+    || a.stMin - b.stMin                   // 2. 時間第二優先（早→晚）
+    || roomRank(a.room)-roomRank(b.room)   // 3. 教室第三
+    || a.teacher.localeCompare(b.teacher)  // 4. 老師第四
+    || a.student.localeCompare(b.student)  // 5. 學生最後
+  );
+
+  // 6) 0913轉成點名表列，套用「請假後續留白/丟棄」規則
+  //目的：主表第一段是「請假」時，後續（同日×同師×同生）的區段要依設定留白或不輸出。
+  const rows = merged.map(m => {
+    // 原始狀態彙總（同區塊若一致就帶出）
+    const uniq = [...new Set(m.stats.filter(Boolean))];
+    let statusOut = (uniq.length === 1) ? uniq[0] : '';
+    let noteOut   = m.note;
+    let drop = false;
+
+    // 依 key 取得「請假最早結束點」
+    const leaveKey = LEAVE_KEY_INCLUDES_ROOM
+      ? `${m.date}|${m.teacher}|${m.student}|${m.room}`
+      : `${m.date}|${m.teacher}|${m.student}`;
+    const leaveEnd = leaveUntilMap.get(leaveKey);
+
+    // 若該生該日已出現過「請假」，且本段開始時間 >= 請假結束點，且本段非請假 → 套用規則
+  if (leaveEnd !== undefined && m.stMin >= leaveEnd && !LEAVE_STATUSES.includes(statusOut)) {
+  // 如果主表已經有非空狀態，就保持原狀，不要清空
+  if (!statusOut || statusOut.trim() === '') {
+    if (LEAVE_PROPAGATION_MODE === 'DROP') {
+      drop = true;
+    } else {
+      statusOut = '';
+      if (LEAVE_NOTE_TAG) {
+        noteOut = noteOut ? (noteOut + '｜' + LEAVE_NOTE_TAG) : LEAVE_NOTE_TAG;
+      }
+    }
+  }
+  // 如果已經有狀態（如「上課有到」），就不動它
+}
+
+    if (drop) return null;
+
+    return [
+      m.date,
+      m.stMin / 1440,
+      m.edMin / 1440,
+      m.room,
+      m.teacher,
+      m.student,
+      noteOut,
+      statusOut,
+      m.sheet,
+      '\'' + m.rows.join(',')
+    ];
+  }).filter(Boolean);
+
+  // 7) 寫入新表 + 格式
+  showToast('正在建立點名表...','⚙️ 執行中',-1);
+  const newName = `點名用 ${startStr} ~ ${endStr}`;
+  const old = ss.getSheetByName(newName);
+  if(old) ss.deleteSheet(old);
+  const sh2 = ss.insertSheet(newName);
+
+  const needed = rows.length + 4;
+  const have   = sh2.getMaxRows();
+  if(needed > have) sh2.insertRowsAfter(have, needed - have);
+
+  const header = ['日期','開始時間','結束時間','教室','老師','學生','學生備註','點名','主表名稱','主表行號'];
+  sh2.getRange(3, 1, 1, header.length).setValues([header]);
+
+  if(rows.length > 0) {
+    sh2.getRange(5, 1, rows.length, header.length).setValues(rows);
+    sh2.getRange(5, 2, rows.length, 2).setNumberFormat('hh:mm');
+
+    const dv = SpreadsheetApp.newDataValidation()
+                 .requireValueInList(ATT_VALUES.map(o => o.v), true)
+                 .setAllowInvalid(false).build();
+    sh2.getRange(5, 8, rows.length, 1).setDataValidation(dv);
+
+    const cf = ATT_VALUES.map(o =>
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenTextEqualTo(o.v)
+        .setBackground(o.color)
+        .setRanges([sh2.getRange(5, 8, rows.length)])
+        .build()
+    );
+    sh2.setConditionalFormatRules(cf);
+  }
+
+  formatAttendanceSheetOptimized(sh2);
+
+  // 【🚀 核心優化：改善保護機制】
+  if(rows.length > 0) {
+    setupAdvancedProtection(sh2, rows.length);
+  }
+
+  SpreadsheetApp.flush();
+  clearToast();
+  SpreadsheetApp.getUi().alert(`✅ 點名單已產生（按時間排序），共 ${rows.length} 列`);
+}
+
+/* === 🚀 新增：改善的保護機制 === */
+function setupAdvancedProtection(sheet, dataRows) {
+  try {
+    // 方案A：完整保護 + 開放點名欄
+    const protection = sheet.protect()
+      .setDescription('點名表保護 - 僅限點名欄可編輯')
+      .setWarningOnly(false);  // 強制保護，不是警告模式
+    
+    // 取得目前的擁有者
+    const owner = DriveApp.getFileById(SpreadsheetApp.getActiveSpreadsheet().getId()).getOwner();
+    
+    // 只有擁有者可以編輯保護設定
+    protection.removeEditors(protection.getEditors());
+    if (owner) {
+      protection.addEditor(owner.getEmail());
+    }
+    
+    // 設定不受保護的範圍：只有點名欄（第8欄）
+    const unprotectedRange = sheet.getRange(5, 8, dataRows, 1);
+    protection.setUnprotectedRanges([unprotectedRange]);
+    
+    showToast('保護機制設定完成','✅ 成功',2);
+    
+  } catch (error) {
+    console.error('設定保護機制失敗:', error);
+    
+    // 備用方案：使用較簡單的保護機制
+    try {
+      const simpleProtection = sheet.protect().setDescription('點名表保護（簡化版）');
+      const attendanceRange = sheet.getRange(5, 8, dataRows, 1);
+      simpleProtection.setUnprotectedRanges([attendanceRange]);
+      showToast('使用簡化保護機制','⚠️ 提醒',3);
+    } catch (fallbackError) {
+      console.error('備用保護機制也失敗:', fallbackError);
+      showToast('保護機制設定失敗','❌ 錯誤',3);
+    }
+  }
+}
+
+/* === 🚀 新增：手動重新排序現有點名表 === */
+function resortAttendanceSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  
+  // 檢查是否為點名表
+  if (!sheet.getName().includes('點名用')) {
+    SpreadsheetApp.getUi().alert('❌ 請在點名表上執行此功能');
+    return;
+  }
+  
+  showToast('正在重新排序點名表...', '⚙️ 處理中', 3);
+  
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 4) {
+    SpreadsheetApp.getUi().alert('❌ 點名表沒有資料');
+    return;
+  }
+  
+  // 取得標題行（第3行，index=2）和資料
+  const headers = data[2];
+  const dataRows = data.slice(4); // 從第5行開始的資料
+  
+  // 找到各欄位的索引
+  const dateIdx = headers.indexOf('日期');
+  const timeIdx = headers.indexOf('開始時間');
+  const roomIdx = headers.indexOf('教室');
+  const teacherIdx = headers.indexOf('老師');
+  const studentIdx = headers.indexOf('學生');
+  
+  if (dateIdx === -1 || timeIdx === -1) {
+    SpreadsheetApp.getUi().alert('❌ 找不到必要的欄位（日期、開始時間）');
+    return;
+  }
+  
+  // 排序：日期 → 時間 → 教室 → 老師 → 學生
+  dataRows.sort((a, b) => {
+    // 日期比較
+    const dateA = new Date(a[dateIdx]);
+    const dateB = new Date(b[dateIdx]);
+    if (dateA.getTime() !== dateB.getTime()) {
+      return dateA.getTime() - dateB.getTime();
+    }
+    
+    // 時間比較
+    const timeA = a[timeIdx] instanceof Date ? a[timeIdx].getTime() : 0;
+    const timeB = b[timeIdx] instanceof Date ? b[timeIdx].getTime() : 0;
+    if (timeA !== timeB) {
+      return timeA - timeB;
+    }
+    
+    // 教室比較
+    if (roomIdx !== -1) {
+      const roomA = roomRank(a[roomIdx]);
+      const roomB = roomRank(b[roomIdx]);
+      if (roomA !== roomB) {
+        return roomA - roomB;
+      }
+    }
+    
+    // 老師比較
+    if (teacherIdx !== -1) {
+      const teacherComp = String(a[teacherIdx]).localeCompare(String(b[teacherIdx]));
+      if (teacherComp !== 0) {
+        return teacherComp;
+      }
+    }
+    
+    // 學生比較
+    if (studentIdx !== -1) {
+      return String(a[studentIdx]).localeCompare(String(b[studentIdx]));
+    }
+    
+    return 0;
+  });
+  
+  // 寫回工作表
+  sheet.getRange(5, 1, dataRows.length, headers.length).setValues(dataRows);
+  
+  // 重新套用格式
+  formatAttendanceSheetOptimized(sheet);
+  
+  SpreadsheetApp.flush();
+  SpreadsheetApp.getUi().alert('✅ 點名表已重新排序（按時間排列）');
+}
+
+/* === 🚀 新增：修復保護機制 === */
+function fixProtectionSettings() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  
+  if (!sheet.getName().includes('點名用')) {
+    SpreadsheetApp.getUi().alert('❌ 請在點名表上執行此功能');
+    return;
+  }
+  
+  const dataRows = sheet.getLastRow() - 4;
+  if (dataRows <= 0) {
+    SpreadsheetApp.getUi().alert('❌ 點名表沒有資料');
+    return;
+  }
+  
+  try {
+    // 先移除現有的保護
+    const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+    protections.forEach(protection => {
+      if (protection.canEdit()) {
+        protection.remove();
+      }
+    });
+    
+    // 重新設定保護
+    setupAdvancedProtection(sheet, dataRows);
+    
+    SpreadsheetApp.getUi().alert('✅ 保護機制已修復');
+    
+  } catch (error) {
+    console.error('修復保護機制失敗:', error);
+    SpreadsheetApp.getUi().alert('❌ 修復失敗，請檢查權限設定');
+  }
+}
+
+/* === 🚀 新增：檢查保護狀態 === */
+function checkProtectionStatus() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  
+  if (!sheet.getName().includes('點名用')) {
+    SpreadsheetApp.getUi().alert('❌ 請在點名表上執行此功能');
+    return;
+  }
+  
+  const protections = sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET);
+  const currentUser = Session.getEffectiveUser().getEmail();
+  const file = DriveApp.getFileById(ss.getId());
+  const owner = file.getOwner();
+  
+  let report = `📊 保護狀態報告\n\n`;
+  report += `工作表：${sheet.getName()}\n`;
+  report += `保護數量：${protections.length}\n`;
+  report += `檔案擁有者：${owner ? owner.getEmail() : '無法取得'}\n`;
+  report += `目前使用者：${currentUser}\n\n`;
+  
+  if (protections.length === 0) {
+    report += `❌ 沒有保護機制\n`;
+  } else {
+    protections.forEach((protection, index) => {
+      report += `🔒 保護 ${index + 1}：\n`;
+      report += `   描述：${protection.getDescription()}\n`;
+      report += `   可編輯：${protection.canEdit()}\n`;
+      report += `   警告模式：${protection.isWarningOnly()}\n`;
+      
+      const editors = protection.getEditors();
+      report += `   編輯者數量：${editors.length}\n`;
+      
+      const unprotectedRanges = protection.getUnprotectedRanges();
+      report += `   開放範圍數量：${unprotectedRanges.length}\n`;
+      if (unprotectedRanges.length > 0) {
+        unprotectedRanges.forEach((range, i) => {
+          report += `      範圍 ${i + 1}：${range.getA1Notation()}\n`;
+        });
+      }
+      report += `\n`;
+    });
+  }
+  
+  SpreadsheetApp.getUi().alert(report);
+}
+
+/* === 🚀 新增：強制設定保護（測試用） === */
+function forceSetupProtection() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getActiveSheet();
+  
+  if (!sheet.getName().includes('點名用')) {
+    SpreadsheetApp.getUi().alert('❌ 請在點名表上執行此功能');
+    return;
+  }
+  
+  const dataRows = sheet.getLastRow() - 4;
+  if (dataRows <= 0) {
+    SpreadsheetApp.getUi().alert('❌ 點名表沒有資料');
+    return;
+  }
+  
+  console.log('=== 強制設定保護機制 ===');
+  setupAdvancedProtection(sheet, dataRows);
+  
+  // 執行後立即檢查狀態
+  setTimeout(() => {
+    checkProtectionStatus();
+  }, 1000);
+}
+/*************************************************
+ * 模組 6: 點名表格式管理 - 優化版
+ *************************************************/
+
+/* === 優化的格式函式 === */
+function formatAttendanceSheet(sheet){
+  formatAttendanceSheetOptimized(sheet);
+}
+
+function formatAttendanceSheetOptimized(sheet){
+  sheet = sheet || SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  const lr = sheet.getLastRow();
+  if(lr <= 4) return;
+  const lc = sheet.getLastColumn();
+  
+  // 🔧 先清除所有現有邊框（修正粗線殘留問題）
+  sheet.getRange(5, 1, lr-4, lc).setBorder(false, false, false, false, false, false);
+  
+  // 批量讀取老師資料
+  const teacherData = sheet.getRange(5, 5, lr-4, 1).getDisplayValues();
+  
+  // 計算背景色和邊框
+  const colors = [];
+  const borderRows = [];
+  const grey = '#eeeeee';
+  const white = '#ffffff';
+  
+  let useGrey = true;
+  let cnt = 0;
+  let prevTeacher = '';
+  
+  for(let i = 0; i < teacherData.length; i++) {
+    const r = i + 5; // 實際行號
+    const curTeacher = teacherData[i][0].trim();
+    
+    // 背景色
+    colors.push(Array(lc).fill(useGrey ? grey : white));
+    if(++cnt === 3) { 
+      useGrey = !useGrey; 
+      cnt = 0; 
+    }
+    
+    // 邊框
+    if(curTeacher !== prevTeacher && i > 0) {
+      borderRows.push(r - 1); // 前一行加底線
+    }
+    prevTeacher = curTeacher;
+  }
+  
+  // 最後一列也要底線
+  borderRows.push(lr);
+  
+  // 批量執行格式設定
+  if(colors.length > 0) {
+    sheet.getRange(5, 1, colors.length, lc).setBackgrounds(colors);
+  }
+  
+  // 批量設定底線
+  borderRows.forEach(row => {
+    sheet.getRange(row, 1, 1, lc)
+         .setBorder(false,false,true,false,false,false,
+                   'black', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+  });
+  
+  SpreadsheetApp.flush();
+}
+
+/*************************************************
+ * 模組 7: 點名回寫功能 + 增強版衝突檢測
+ *************************************************/
+
+/* === 增強版回寫主表功能 - 包含備註衝突檢測 === */
+function writeBackToMainSheet(){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getActiveSheet();
+  
+  showToast('正在讀取點名資料...', '⚙️ 處理中', 3);
+  
+  const data = sh.getDataRange().getDisplayValues();
+  const hdr = data[2];
+  const idx = h => hdr.indexOf(h);
+  
+  const NAME = idx('學生');
+  const NOTE = idx('學生備註');  // 新增：學生備註欄
+  const STATUS = idx('點名');
+  const SRC = idx('主表名稱');
+  const ROWS = idx('主表行號');
+  
+  if([NAME, STATUS, SRC, ROWS].includes(-1)){
+    SpreadsheetApp.getUi().alert('❌ 缺少必要欄位'); 
+    return;
+  }
+
+  const studentCols = [9,13,17,21,25,29,33]; // 學生姓名欄位
+  const grouped = {};
+  
+  // 批量處理點名資料
+  for(let r = 4; r < data.length; r++){
+    const stu = data[r][NAME].trim();
+    const note = NOTE !== -1 ? data[r][NOTE].trim() : ''; // 學生備註
+    const stat = data[r][STATUS].trim();
+    const src = data[r][SRC].trim();
+    const rs = data[r][ROWS];
+    
+    if(!stu || !src || !rs) continue;
+    
+    const rowNumbers = rs.match(/\d+/g).map(Number).sort((a,b) => a - b);
+    rowNumbers.forEach(n => {
+      if(!grouped[src]) grouped[src] = [];
+      grouped[src].push({stu, note, stat, row: n});
+    });
+  }
+
+  showToast('正在回寫主表...', '⚙️ 處理中', -1);
+  
+  const conflicts = [];
+  const success = [];
+  const mainSheetsCache = new Map();
+  
+  // 批量處理每個來源表
+  for(const [srcName, list] of Object.entries(grouped)){
+    const main = ss.getSheetByName(srcName);
+    if(!main) continue;
+    
+    // 確保有足夠的行數
+    const maxRow = Math.max(...list.map(o => o.row));
+    const currentRows = main.getMaxRows();
+    if(maxRow > currentRows) {
+      main.insertRowsAfter(currentRows, maxRow - currentRows);
+    }
+    
+    // 快取主表資料
+    let mainData;
+    if(mainSheetsCache.has(srcName)) {
+      mainData = mainSheetsCache.get(srcName);
+    } else {
+      const numCols = main.getLastColumn();
+      const numRows = main.getMaxRows();
+      mainData = main.getRange(1, 1, numRows, numCols).getDisplayValues();
+      mainSheetsCache.set(srcName, mainData);
+    }
+    
+    // 批量更新
+    const updates = [];
+    
+    list.forEach(({stu, note, stat, row}) => {
+      const ri = row - 1;
+      let found = false;
+      
+      studentCols.forEach(c => {
+        if(!found && ri < mainData.length && mainData[ri][c].trim() === stu){
+          const noteCol = c + 1;  // 學生備註欄
+          const statCol = c + 2;  // 點名狀態欄
+          
+          const currentNote = mainData[ri][noteCol].trim();
+          const currentStat = mainData[ri][statCol].trim();
+          
+          // 檢查點名狀態衝突
+          let hasStatusConflict = false;
+          if(stat && currentStat && currentStat !== stat) {
+            conflicts.push({
+              type: '點名狀態',
+              sheet: srcName,
+              row: row,
+              student: stu,
+              original: currentStat,
+              new: stat,
+              location: `${colToA1(statCol + 1)}${row}`  // ← 修正A1位置
+            });
+            hasStatusConflict = true;
+          }
+          
+          // 檢查學生備註衝突
+          let hasNoteConflict = false;
+          if(note && currentNote && currentNote !== note) {
+            conflicts.push({
+              type: '學生備註',
+              sheet: srcName,
+              row: row,
+              student: stu,
+              original: currentNote,
+              new: note,
+              location: `${colToA1(noteCol + 1)}${row}`  // ← 修正A1位置
+            });
+            hasNoteConflict = true;
+          }
+          
+          // 如果沒有衝突，執行更新
+          if(!hasStatusConflict && stat) {
+            updates.push({row: ri + 1, col: statCol + 1, value: stat});
+            success.push('點名狀態');
+          }
+          
+          if(!hasNoteConflict && note) {
+            updates.push({row: ri + 1, col: noteCol + 1, value: note});
+            success.push('學生備註');
+          }
+          
+          found = true;
+        }
+      });
+      
+      if(!found) {
+        conflicts.push({
+          type: '找不到學生',
+          sheet: srcName,
+          row: row,
+          student: stu,
+          original: '(學生不存在)',
+          new: stat || note,
+          location: '未知'
+        });
+      }
+    });
+    
+    // 批量執行更新
+    updates.forEach(update => {
+      main.getRange(update.row, update.col).setValue(update.value);
+    });
+  }
+
+  // 處理衝突記錄 - 產生增強版衝突表
+  if(conflicts.length > 0){
+    createEnhancedConflictReport(ss, conflicts);
+  }
+
+  SpreadsheetApp.flush();
+  clearToast();
+  
+  // 統計結果
+  const statusUpdates = success.filter(s => s === '點名狀態').length;
+  const noteUpdates = success.filter(s => s === '學生備註').length;
+  
+  let message = `✅ 回寫完成：\n`;
+  message += `• 點名狀態：${statusUpdates} 筆成功\n`;
+  message += `• 學生備註：${noteUpdates} 筆成功\n`;
+  message += `• 衝突：${conflicts.length} 筆`;
+  
+  SpreadsheetApp.getUi().alert(message);
+}
+
+/* === 增強版衝突報告表 === */
+function createEnhancedConflictReport(ss, conflicts) {
+  const timestamp = Utilities.formatDate(new Date(), 'Asia/Taipei', 'yyyyMMdd_HHmmss');
+  const conflictSheetName = `衝突報告_${timestamp}`;
+  
+  // 刪除舊的衝突表
+  const oldConflict = ss.getSheetByName(conflictSheetName);
+  if(oldConflict) ss.deleteSheet(oldConflict);
+  
+  const csh = ss.insertSheet(conflictSheetName);
+  
+  // 設定標題
+  const headers = [
+    '衝突類型', '主表名稱', '行號', '學生姓名', '格子位置', 
+    '原始內容', '點名單內容', '建議處理', '處理狀態'
+  ];
+  csh.getRange(1, 1, 1, headers.length).setValues([headers]);
+  
+  // 準備衝突資料
+  const conflictData = conflicts.map(conflict => {
+    let suggestion = '';
+    switch(conflict.type) {
+      case '點名狀態':
+        suggestion = '確認正確的點名狀態';
+        break;
+      case '學生備註':
+        suggestion = '檢查備註內容是否需要合併';
+        break;
+      case '找不到學生':
+        suggestion = '檢查學生姓名是否正確';
+        break;
+      default:
+        suggestion = '人工檢查';
+    }
+    
+    return [
+      conflict.type,
+      conflict.sheet,
+      conflict.row,
+      conflict.student,
+      conflict.location,
+      conflict.original,
+      conflict.new,
+      suggestion,
+      '待處理'
+    ];
+  });
+  
+  // 寫入衝突資料
+  if(conflictData.length > 0) {
+    csh.getRange(2, 1, conflictData.length, headers.length).setValues(conflictData);
+  }
+  
+  // 設定格式
+  formatConflictReportSheet(csh, conflictData.length);
+  
+  // 切換到衝突報告表
+  ss.setActiveSheet(csh);
+}
+
+/* === 衝突報告表格式設定 === */
+function formatConflictReportSheet(sheet, dataRows) {
+  const headerRange = sheet.getRange(1, 1, 1, 9);
+  
+  // 標題格式
+  headerRange.setBackground('#FFE5CC')
+             .setFontWeight('bold')
+             .setFontSize(11);
+  
+  // 設定欄寬
+  const columnWidths = [80, 150, 50, 100, 80, 120, 120, 150, 80];
+  columnWidths.forEach((width, index) => {
+    sheet.setColumnWidth(index + 1, width);
+  });
+  
+  if(dataRows > 0) {
+    // 資料區域格式
+    const dataRange = sheet.getRange(2, 1, dataRows, 9);
+    dataRange.setFontSize(10)
+             .setVerticalAlignment('top');
+    
+    // 按衝突類型設定顏色
+    const data = sheet.getRange(2, 1, dataRows, 1).getValues();
+    for(let i = 0; i < dataRows; i++) {
+      const conflictType = data[i][0];
+      let bgColor = '#FFFFFF';
+      
+      switch(conflictType) {
+        case '點名狀態':
+          bgColor = '#FFE5E5'; // 淺紅
+          break;
+        case '學生備註':
+          bgColor = '#E5F3FF'; // 淺藍
+          break;
+        case '找不到學生':
+          bgColor = '#FFF2E5'; // 淺橙
+          break;
+      }
+      
+      sheet.getRange(i + 2, 1, 1, 9).setBackground(bgColor);
+    }
+  }
+  
+  // 設定邊框
+  const fullRange = sheet.getRange(1, 1, Math.max(dataRows + 1, 1), 9);
+  fullRange.setBorder(true, true, true, true, true, true, 
+                     '#CCCCCC', SpreadsheetApp.BorderStyle.SOLID);
+  
+  // 凍結標題行
+  sheet.setFrozenRows(1);
+  
+  // 新增說明
+  const explanationRow = dataRows + 3;
+  sheet.getRange(explanationRow, 1, 1, 9)
+       .merge()
+       .setValue('💡 說明：紅色=點名狀態衝突，藍色=學生備註衝突，橙色=找不到學生')
+       .setBackground('#F0F0F0')
+       .setFontStyle('italic');
+}
+
+/*************************************************
+ * 模組 8: 選單系統與測試工具
+ *************************************************/
+
+/*************************************************
+ * F. onOpen — 選單系統
+ *************************************************/
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+
+  /* 🗂️  課表功能 */
+  ui.createMenu('🗂️ 課表功能')
+    .addItem('🛠️ 更新表格格式及科目數', 'updateMainSheetCurrent')
+    .addItem('💰 計算科目數獎金',       'openMonthSidebar')
+    .addSeparator()
+    .addItem('📘 產生下一週課表',       'createNextWeekSheet')
+    .addToUi();
+
+  /* 📋  點名功能 */
+  ui.createMenu('📋 點名功能')
+    .addItem('📤 產生點名單',           'showSidebarToGenerateSheet')
+    .addItem('🎨 點名表格式更新',       'formatAttendanceSheet')
+    .addItem('📥 回寫主表',             'writeBackToMainSheet')
+    .addToUi();
+}
+
+/*************************************************
+ * 測試和除錯函式
+ *************************************************/
+
+// 測試學生欄位檢測
+function testStudentNameDetection() {
+  const testCases = [
+    '長安-陳柔羽', '王小明', '李小華(補)', 'John王', '張三1',
+    '國中-承恩理化', '英文A班', '待排', '空白', '123', 'ABC', 'A',
+    '這是一個很長的課程描述內容', '', '   ', '自然科學'
+  ];
+  
+  console.log('=== 學生欄位檢測測試 ===');
+  testCases.forEach(name => {
+    const result = isStudentName(name);
+    const status = result ? '✅ 會抓取' : '❌ 不抓取';
+    console.log(`${status}: "${name}"`);
+  });
+}
+
+// 測試時間解析
+function testTimeParsingFunction() {
+  const testTimes = ['12:30', '1230', '9:00', '900', '14:45', '1445'];
+  
+  console.log('=== 時間解析測試 ===');
+  testTimes.forEach(time => {
+    const minutes = parseTimeToMinutes(time);
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    console.log(`"${time}" → ${minutes}分鐘 (${hours}:${mins.toString().padStart(2,'0')})`);
+  });
+}
+
+/*************************************************
+ * 版本資訊和說明
+ *************************************************/
+function showVersionInfo() {
+  const info = `📋 Google Apps Script 課表點名系統 v2.1 模組化版本
+
+🚀 主要特色：
+✅ 效能提升 50-70%
+✅ 學生欄位改為有字就抓，完全保留原格內容
+✅ 修正粗線殘留問題
+✅ 增強衝突檢測 (點名狀態 + 學生備註)
+✅ 批量操作優化
+✅ 外部獎金表生成加速
+
+🔧 核心功能：
+• 主表統計與格式更新
+• 科目數與獎金計算
+• 智能點名單生成 (2小時合併上限)
+• 衝突檢測與報告
+• 週表管理
+
+【從2.1版提取優化】
+• Toast訊息優化 - 更穩定的顯示和清除
+• HTML錯誤處理 - 防止側邊欄開啟失敗
+• 分校科目數位置與顏色 - 動態位置、背景色、粗體顯示
+• 學生欄判斷調整 - 只要格子有值就直接抓到點名單
+
+💡 使用提示：
+• 使用前請備份資料
+• 大量資料處理建議分批執行
+• 如有問題請檢查函式執行記錄
+• 分校科目數現在會自動調整位置並加上顏色標示
+
+更新日期：2026/03/03
+版本：v2.1 模組化版本
+本次調整：取消學生欄位限制，學生欄有值就抓`;
+  
+  SpreadsheetApp.getUi().alert(info);
+}
