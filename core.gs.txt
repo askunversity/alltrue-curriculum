@@ -493,7 +493,7 @@ function processMonthSheet(outSS, monthName, teacherList, refTable) {
   const headers = [
     ['日期','老師姓名','科目數總計','輔導科目數總計','一對三總計',
      '科目數佔比','行政或輔導加給','師派科目數總計','師派輔導數','師派一對三',
-     '含師派輔導科目數總計','科目數獎金','一對三獎金','200科獎金','總發放獎金']
+     '含師派輔導科目數總計','科目數獎金','一對三獎金','240科獎金','總發放獎金']
   ];
   
   sh.getRange(1, 1, 1, 15).setValues(headers);
@@ -546,7 +546,7 @@ function processMonthSheet(outSS, monthName, teacherList, refTable) {
         `=SUM(C${r}:D${r})+SUM(G${r}:I${r})`, 
         `=IF(K${r}>9.999,LOOKUP(ROUNDDOWN(K${r},0),$R$2:$R$47,$S$2:$S$47),0)`, 
         `=(E${r}+J${r})*100`, 
-        `=IF($C$${summaryRow}>=200,ROUNDDOWN($C$${summaryRow}*200*F${r},-2),0)` 
+        `=IF($C$${summaryRow}>=240,ROUNDDOWN($C$${summaryRow}*240*F${r},-2),0)` 
       ];
     });
     
